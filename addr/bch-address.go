@@ -9,6 +9,7 @@ import (
 
 const (
 	ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 )
 
 var (
@@ -105,6 +106,116 @@ func BitcoinCashAddrToBtcOldAddr(bchNewAddr string, isTestNet bool) (btcOldAddr 
 	btcOldAddr = string(converted)
 	return
 }
+
+
+func BtcOldAddrToBitcoinCashNewAddr(btcOldAddr string) (bitcoinCashAddr string, err error){
+	var bytes = make([]byte, 0, len(btcOldAddr))
+	for i:=0; i<len(btcOldAddr); i++ {
+		ch := string(btcOldAddr[i])
+		if _, ok := ALPHABET_MAP[ch]; !ok {
+			err = errors.New("Unexpected character in address!")
+			return
+		}
+		value := ALPHABET_MAP[ch]
+		for j:=0; j<len(bytes); j++ {
+			value += int(bytes[j]) * 58
+			bytes[j] = byte(value & 0xff)
+			value >>= 8
+		}
+
+		for value > 0 {
+			bytes = append(bytes, byte(value & 0xff))
+			value >>= 8
+		}
+	}
+
+	for i:=0; i<len(btcOldAddr) && btcOldAddr[i] == '1'; i++ {
+		bytes = append(bytes, 0)
+	}
+
+	var answer = make([]byte, 0, len(bytes))
+	for i:=len(bytes)-1; i >= 0; i-- {
+		answer = append(answer, bytes[i])
+	}
+
+	version := answer[0]
+	payload := answer[1:len(answer)-4]
+
+	if len(payload) % 4 != 0 {
+		err = errors.New("Unexpected address length!")
+		return
+	}
+
+	var addrType int
+	var realNet bool
+	switch version {
+	case 0x00:
+		addrType = 0
+		realNet = true
+	case 0x05:
+		addrType = 1
+		realNet = true
+	case 0x6f:
+		addrType = 0
+		realNet = false
+	case 0xc4:
+		addrType = 1
+		realNet = false
+	case 0x1c:
+		addrType = 0
+		realNet = true
+	case 0x28:
+		addrType = 1
+		realNet = true
+	default:
+		err = errors.New("Unknown address type!")
+		return
+	}
+
+	encodeSize := (len(payload) - 20) / 4
+	versionByte := (addrType << 3) | encodeSize
+	data := []byte{byte(versionByte),}
+	data = append(data, payload...)
+
+	payloadConverted, err := convertBits(data, 8, 5, true)
+	if err != nil {
+		return
+	}
+
+	var arr = make([]int, 0 ,len(payloadConverted))
+	var prefixValue string
+	if realNet {
+		arr = append(arr, EXPAND_PREFIX...)
+		arr = append(arr, payloadConverted...)
+		arr = append(arr, []int{0, 0, 0, 0, 0, 0, 0, 0}...)
+		prefixValue = "bitcoincash:"
+	}else{
+		arr = append(arr, EXPAND_PREFIX_TESTNET...)
+		arr = append(arr, payloadConverted...)
+		arr = append(arr, []int{0, 0, 0, 0, 0, 0, 0, 0}...)
+		prefixValue = "bchtest:"
+	}
+
+	mod := polyMod(arr)
+	checksum := []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	for i:=0; i<8; i++ {
+		checksum[i] = byte((mod >> uint((5 * (7-i))))) & 0x1f
+	}
+	var combined = make([]byte, 0, len(payloadConverted))
+	for i:=0; i<len(payloadConverted); i++ {
+		combined = append(combined, byte(payloadConverted[i]))
+	}
+	combined = append(combined, checksum...)
+
+	var retBuffer strings.Builder
+	retBuffer.WriteString(prefixValue)
+	for i:=0 ; i<len(combined); i++ {
+		retBuffer.WriteByte(CHARSET[combined[i]])
+	}
+	bitcoinCashAddr = retBuffer.String()
+	return
+}
+
 
 func decodeNewAddr(bchNewAddr string, isTestNet bool) (data []int, err error) {
 	inputNew := strings.ToLower(bchNewAddr)
